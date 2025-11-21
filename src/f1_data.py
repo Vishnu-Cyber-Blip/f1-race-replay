@@ -10,9 +10,6 @@ fastf1.Cache.enable_cache('.fastf1-cache')
 FPS = 25
 DT = 1 / FPS
 
-loading_status = "Loading..."
-loading_percent = 0.0
-
 def load_race_session(year, round_number):
     session = fastf1.get_session(year, round_number, 'R')
     session.load(telemetry=True)

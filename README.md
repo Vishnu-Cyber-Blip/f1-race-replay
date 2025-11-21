@@ -1,4 +1,4 @@
-# F1 Race Replay
+# F1 Race Replay 🏎️ 🏁
 
 A Python application for visualizing Formula 1 race telemetry and replaying race events with interactive controls and a graphical interface.
 
@@ -9,7 +9,6 @@ A Python application for visualizing Formula 1 race telemetry and replaying race
 - **Lap & Time Display:** Track the current lap and total race time.
 - **Driver Status:** Drivers who retire or go out are marked as "OUT" on the leaderboard.
 - **Interactive Controls:** Pause, rewind, fast forward, and adjust playback speed using on-screen buttons or keyboard shortcuts.
-- **Loading Screen:** Animated loading bar with driver progress.
 - **Legend:** On-screen legend explains all controls.
 
 ## Controls
