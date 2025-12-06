@@ -470,7 +470,9 @@ def get_driver_quali_telemetry(session, driver_code: str, quali_segment: str):
     fastest_lap = driver_laps.pick_fastest()
 
     # Extract telemetry with xyz coordinates
-    # telemetry = fastest_lap.get_car_data().add_distance()
+
+    if fastest_lap is None:
+        raise ValueError(f"No valid laps for driver '{driver_code}' in {quali_segment}")
 
     telemetry = fastest_lap.get_telemetry()
 

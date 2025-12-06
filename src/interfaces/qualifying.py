@@ -20,7 +20,7 @@ BOTTOM_MARGIN = 40
 
 class QualifyingReplay(arcade.Window):
     def __init__(self, session, data, circuit_rotation=0, left_ui_margin=340, right_ui_margin=0, title="Qualifying Results"):
-        super().__init__(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, title=title)
+        super().__init__(width=SCREEN_WIDTH, height=SCREEN_HEIGHT, title=title, resizable=True)
         self.session = session
         self.data = data
         self.leaderboard = LapTimeLeaderboardComponent(
