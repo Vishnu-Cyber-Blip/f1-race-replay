@@ -6,8 +6,8 @@ from src.ui_components import LeaderboardComponent, WeatherComponent, LegendComp
 
 
 # Kept these as "default" starting sizes, but they are no longer hard limits
-SCREEN_WIDTH = 1920
-SCREEN_HEIGHT = 1200
+SCREEN_WIDTH = 1600
+SCREEN_HEIGHT = 900
 SCREEN_TITLE = "F1 Replay"
 
 class F1RaceReplayWindow(arcade.Window):
