@@ -423,6 +423,8 @@ class F1RaceReplayWindow(arcade.Window):
             ("[R]       Restart"),
             ("[D]       Toggle DRS Zones"),
             ("[B]       Toggle Progress Bar"),
+            ("[Shift + Click] Select Multiple Drivers")
+
         ]
         
         for i, lines in enumerate(legend_lines):
