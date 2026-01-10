@@ -993,7 +993,7 @@ class QualifyingReplay(arcade.Window):
         self.race_controls_comp.on_update(delta_time)
         
         # Block for continuous seeking
-        seek_speed = 3.0 
+        seek_speed = 3.0 * max(1.0, self.playback_speed) # Multiplier for seeking speed, scales with current playback speed
         if self.is_rewinding:
             self.play_time -= delta_time * seek_speed
             self.race_controls_comp.flash_button('rewind')
