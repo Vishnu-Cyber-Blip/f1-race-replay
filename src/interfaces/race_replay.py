@@ -15,6 +15,7 @@ from src.ui_components import (
     build_track_from_example_lap,
     draw_finish_line
 )
+from src.ui_components import RaceControlPanel
 
 
 SCREEN_WIDTH = 1280
@@ -56,10 +57,10 @@ class F1RaceReplayWindow(arcade.Window):
         # UI components
         leaderboard_x = max(20, self.width - self.right_ui_margin + 12)
         self.leaderboard_comp = LeaderboardComponent(x=leaderboard_x, width=240, visible=visible_hud)
-        self.weather_comp = WeatherComponent(left=20, top_offset=170, visible=visible_hud)
         self.legend_comp = LegendComponent(x=max(12, self.left_ui_margin - 320), visible=visible_hud)
         self.driver_info_comp = DriverInfoComponent(left=20, width=300)
         self.controls_popup_comp = ControlsPopupComponent()
+        self.race_control_ui = RaceControlPanel(x=50, y=self.height - 150)
 
         self.controls_popup_comp.set_size(340, 250) # width/height of the popup box
         self.controls_popup_comp.set_font_sizes(header_font_size=16, body_font_size=13) # adjust font sizes
@@ -273,7 +274,7 @@ class F1RaceReplayWindow(arcade.Window):
         self.update_scaling(width, height)
         # notify components
         self.leaderboard_comp.x = max(20, self.width - self.right_ui_margin + 12)
-        for c in (self.leaderboard_comp, self.weather_comp, self.legend_comp, self.driver_info_comp, self.progress_bar_comp, self.race_controls_comp):
+        for c in (self.leaderboard_comp, self.legend_comp, self.driver_info_comp, self.progress_bar_comp, self.race_controls_comp):
             c.on_resize(self)
         
         # update persistent text positions
@@ -311,10 +312,13 @@ class F1RaceReplayWindow(arcade.Window):
         idx = int((deg_norm / 22.5) + 0.5) % len(dirs)
         return dirs[idx]
 
+
+
+
     def on_draw(self):
         self.clear()
 
-        # 1. Draw Background (stretched to fit new window size)
+        # 1. Draw Background
         if self.bg_texture:
             arcade.draw_lrbt_rectangle_textured(
                 left=0, right=self.width,
@@ -322,65 +326,56 @@ class F1RaceReplayWindow(arcade.Window):
                 texture=self.bg_texture
             )
 
-        # 2. Draw Track (using pre-calculated screen points)
+        # 2. Draw Track
         idx = min(int(self.frame_index), self.n_frames - 1)
         frame = self.frames[idx]
         current_time = frame["t"]
-        current_track_status = "GREEN"
+        
+        # Calculate Track Status
+        current_track_status = "1" 
         for status in self.track_statuses:
             if status['start_time'] <= current_time and (status['end_time'] is None or current_time < status['end_time']):
                 current_track_status = status['status']
                 break
 
-        # Map track status -> colour (R,G,B)
+        # Track Colors
         STATUS_COLORS = {
-            "GREEN": (150, 150, 150),    # normal grey
-            "YELLOW": (220, 180,   0),   # caution
-            "RED": (200,  30,  30),      # red-flag
-            "VSC": (200, 130,  50),      # virtual safety car / amber-brown
-            "SC": (180, 100,  30),       # safety car (darker brown)
+            "GREEN": (150, 150, 150),
+            "YELLOW": (220, 180,   0),
+            "RED": (200,  30,  30),
+            "VSC": (200, 130,  50),
+            "SC": (180, 100,  30),
         }
-        track_color = STATUS_COLORS.get("GREEN", (150, 150, 150))
-
-        if current_track_status == "2":
-            track_color = STATUS_COLORS.get("YELLOW")
-        elif current_track_status == "4":
-            track_color = STATUS_COLORS.get("SC")
-        elif current_track_status == "5":
-            track_color = STATUS_COLORS.get("RED")
-        elif current_track_status == "6" or current_track_status == "7":
-            track_color = STATUS_COLORS.get("VSC")
+        
+        track_color = STATUS_COLORS.get("GREEN")
+        if current_track_status == "2": track_color = STATUS_COLORS.get("YELLOW")
+        elif current_track_status == "4": track_color = STATUS_COLORS.get("SC")
+        elif current_track_status == "5": track_color = STATUS_COLORS.get("RED")
+        elif current_track_status in ["6", "7"]: track_color = STATUS_COLORS.get("VSC")
             
         if len(self.screen_inner_points) > 1:
             arcade.draw_line_strip(self.screen_inner_points, track_color, 4)
         if len(self.screen_outer_points) > 1:
             arcade.draw_line_strip(self.screen_outer_points, track_color, 4)
         
-        # 2.5 Draw DRS Zones (green segments on outer track edge)
+        # DRS Zones
         if hasattr(self, 'drs_zones') and self.drs_zones and self.toggle_drs_zones:
-            drs_color = (0, 255, 0)  # Bright green for DRS zones
-            
+            drs_color = (0, 255, 0)
             for _, zone in enumerate(self.drs_zones):
                 start_idx = zone["start"]["index"]
                 end_idx = zone["end"]["index"]
-                
-                # Extract the outer track points for this DRS zone segment
                 drs_outer_points = []
                 for i in range(start_idx, min(end_idx + 1, len(self.x_outer))):
                     x = self.x_outer.iloc[i]
                     y = self.y_outer.iloc[i]
                     sx, sy = self.world_to_screen(x, y)
                     drs_outer_points.append((sx, sy))
-                
-                # Draw the DRS zone segment
                 if len(drs_outer_points) > 1:
                     arcade.draw_line_strip(drs_outer_points, drs_color, 6)
 
         draw_finish_line(self)
+
         # 3. Draw Cars
-        frame = self.frames[idx]
-        
-        # Get selected drivers list safely
         selected_drivers = getattr(self, "selected_drivers", [])
         if not selected_drivers and getattr(self, "selected_driver", None):
             selected_drivers = [self.selected_driver]
@@ -388,20 +383,14 @@ class F1RaceReplayWindow(arcade.Window):
         for i, (code, pos) in enumerate(frame["drivers"].items()):
             sx, sy = self.world_to_screen(pos["x"], pos["y"])
             color = self.driver_colors.get(code, arcade.color.WHITE)
-            
             is_selected = code in selected_drivers
             
             if self.show_driver_labels or is_selected:
-                # Find closest point index on reference track
                 r_dx = self._ref_xs - pos["x"]
                 r_dy = self._ref_ys - pos["y"]
                 idx = int(np.argmin(r_dx*r_dx + r_dy*r_dy))
+                nx, ny = self._ref_nx[idx], self._ref_ny[idx]
                 
-                # Get normal vector in world space
-                nx = self._ref_nx[idx]
-                ny = self._ref_ny[idx]
-                
-                # Rotate normal to screen space
                 if self._rot_rad:
                     snx = nx * self._cos_rot - ny * self._sin_rot
                     sny = nx * self._sin_rot + ny * self._cos_rot
@@ -409,123 +398,111 @@ class F1RaceReplayWindow(arcade.Window):
                     snx, sny = nx, ny
                 
                 offset_dist = 45 if i % 2 == 0 else 75
-                
                 lx = sx + snx * offset_dist
                 ly = sy + sny * offset_dist
                 
                 arcade.draw_line(sx, sy, lx, ly, color, 1)
-                
-                anchor_x = "left" if snx >= 0 else "right"
-                text_padding = 3 if snx >= 0 else -3
-                arcade.draw_text(code, lx + text_padding, ly, color, 10, anchor_x=anchor_x, anchor_y="center", bold=True)
+                anchor = "left" if snx >= 0 else "right"
+                pad = 3 if snx >= 0 else -3
+                arcade.draw_text(code, lx + pad, ly, color, 10, anchor_x=anchor, anchor_y="center", bold=True)
 
             arcade.draw_circle_filled(sx, sy, 6, color)
         
-        # --- UI ELEMENTS (Dynamic Positioning) ---
+        # --- UI ELEMENTS ---
         
-        # Determine Leader info using projected along-track distance (more robust than dist)
-        # Use the progress metric in metres for each driver and use that to order the leaderboard.
+        # 1. CALCULATE PROGRESS (Same Metric used by DriverInfoComponent)
         driver_progress = {}
         for code, pos in frame["drivers"].items():
-            # parse lap defensively
-            lap_raw = pos.get("lap", 1)
-            try:
-                lap = int(lap_raw)
-            except Exception:
-                lap = 1
-
-            # Project (x,y) to reference and combine with lap count
+            lap = int(pos.get("lap", 1))
+            # Project (x,y) to track spline
             projected_m = self._project_to_reference(pos.get("x", 0.0), pos.get("y", 0.0))
-
-            # progress in metres since race start: (lap-1) * lap_length + projected_m
+            # Calculate Total Progress
             progress_m = float((max(lap, 1) - 1) * self._ref_total_length + projected_m)
-
             driver_progress[code] = progress_m
 
-        # Leader is the one with greatest progress_m
+        # Calculate Leader Lap
         if driver_progress:
             leader_code = max(driver_progress, key=lambda c: driver_progress[c])
             leader_lap = frame["drivers"][leader_code].get("lap", 1)
         else:
-            leader_code = None
             leader_lap = 1
 
-        # Time Calculation
-        t = frame["t"]
-        hours = int(t // 3600)
-        minutes = int((t % 3600) // 60)
-        seconds = int(t % 60)
-        time_str = f"{hours:02}:{minutes:02}:{seconds:02}"
-
-        # Format Lap String 
-        lap_str = f"Lap: {leader_lap}"
-        if self.total_laps is not None:
-            lap_str += f"/{self.total_laps}"
-
-        # Draw HUD - Top Left
         if self.visible_hud:
+            t = frame["t"]
+            time_str = f"{int(t // 3600):02}:{int((t % 3600) // 60):02}:{int(t % 60):02}"
+            lap_str = f"Lap: {leader_lap}/{self.total_laps}" if self.total_laps else f"Lap: {leader_lap}"
+            
             self.lap_text.text = lap_str
             self.time_text.text = f"Race Time: {time_str} (x{self.playback_speed})"
-            # default no status text
-            self.status_text.text = ""
-            # update status color and text if required
-            if current_track_status == "2":
-                self.status_text.text = "YELLOW FLAG"
-                self.status_text.color = arcade.color.YELLOW
-            elif current_track_status == "5":
-                self.status_text.text = "RED FLAG"
-                self.status_text.color = arcade.color.RED
-            elif current_track_status == "6":
-                self.status_text.text = "VIRTUAL SAFETY CAR"
-                self.status_text.color = arcade.color.ORANGE
-            elif current_track_status == "4":
-                self.status_text.text = "SAFETY CAR"
-                self.status_text.color = arcade.color.BROWN
-
             self.lap_text.draw()
             self.time_text.draw()
-            if self.status_text.text:
-                self.status_text.draw()
+            
+            # Weather Table
+            weather_info = frame.get("weather") if frame else {}
+            self.race_control_ui.x = self.width - 250 
+            self.race_control_ui.y = 200 
+            self.race_control_ui.draw(weather_info, current_track_status)
+            self.weather_bottom = None 
 
-        # Weather component (set info then draw)
-        weather_info = frame.get("weather") if frame else None
-        self.weather_comp.set_info(weather_info)
-        self.weather_comp.draw(self)
-        # optionally expose weather_bottom for driver info layout
-        self.weather_bottom = self.height - 170 - 130 if (weather_info or self.has_weather) else None
+        # --- LEADERBOARD & MATCHING INTERVALS ---
+        
+        # CONSTANTS FROM DriverInfoComponent
+        REFERENCE_SPEED_MS = 55.56  # Fixed reference speed (200 km/h)
 
-        # Draw leaderboard via component
-        driver_list = []
+        # 1. Gather Data
+        raw_list = []
         for code, pos in frame["drivers"].items():
             color = self.driver_colors.get(code, arcade.color.WHITE)
             progress_m = driver_progress.get(code, float(pos.get("dist", 0.0)))
-            driver_list.append((code, color, pos, progress_m))
-        driver_list.sort(key=lambda x: x[3], reverse=True)
-        self.leaderboard_comp.set_entries(driver_list)
+            raw_list.append((code, color, pos, progress_m))
+        
+        # 2. Sort by Progress
+        raw_list.sort(key=lambda x: (x[3], x[0]), reverse=True)
+        
+        # 3. Calculate Intervals using "The Secret Formula"
+        final_list = []
+        for i, entry in enumerate(raw_list):
+            code, color, pos, progress = entry
+            
+            gap_str = ""
+            if i == 0:
+                gap_str = "Interval" 
+            else:
+                prev_entry = raw_list[i-1]
+                
+                # A. Raw Difference
+                raw_diff = prev_entry[3] - progress
+                
+                # B. Apply DriverInfo Logic (Divide by 10)
+                dist_m = raw_diff / 10.0
+                
+                # C. Apply Fixed Speed Logic (Divide by 55.56)
+                time_s = dist_m / REFERENCE_SPEED_MS
+                
+                if time_s >= 60:
+                    gap_str = "+60s+"
+                else:
+                    gap_str = f"+{time_s:.2f}s"
+
+            final_list.append((code, color, pos, progress, gap_str))
+        
+        self.leaderboard_comp.set_entries(final_list)
         self.leaderboard_comp.draw(self)
-        # expose rects for existing hit test compatibility if needed
         self.leaderboard_rects = self.leaderboard_comp.rects
 
-        # Controls Legend - Bottom Left (keeps small offset from left UI edge)
+        # Components
         self.legend_comp.draw(self)
-        
-        # Selected driver info component
         self.driver_info_comp.draw(self)
-        
-        # Race Progress Bar with event markers (DNF, flags, leader changes)
         self.progress_bar_comp.draw(self)
-        
-        # Race playback control buttons
         self.race_controls_comp.draw(self)
-        
-        # Session info banner (top of screen)
         self.session_info_comp.draw(self)
-
-        # Draw Controls popup box
         self.controls_popup_comp.draw(self)
-        
-        # Draw tooltips and overlays on top of everything
         self.progress_bar_comp.draw_overlays(self)
+
+
+
+
+        
                     
     def on_update(self, delta_time: float):
         self.race_controls_comp.on_update(delta_time)
