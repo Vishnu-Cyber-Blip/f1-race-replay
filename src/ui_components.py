@@ -242,8 +242,8 @@ class LeaderboardComponent(BaseComponent):
     def __init__(self, x: int, right_margin: int = 260, width: int = 240, visible=True):
         self.x = x
         self.width = width
-        # Match the styling of the Race Control Panel
-        self.bg_color = (15, 15, 20, 240)      # Deep Blue-Black
+        # Match the styling of the Race Control Panel (Your Style)
+        self.bg_color = (15, 15, 20, 240)       # Deep Blue-Black
         self.header_color = (30, 30, 35, 255)  # Slightly lighter header
         self.border_color = (60, 60, 70)       # Subtle border
         self.text_white = (255, 255, 255)
@@ -251,8 +251,16 @@ class LeaderboardComponent(BaseComponent):
         
         self.entries = []  # list of tuples (code, color, pos, progress_m, gap_str)
         self.rects = []    # clickable rects per entry
-        self.selected = [] 
+        self.selected = []  
         self.row_height = 28  # Slightly taller for better readability
+        
+        # Gap Toggle State (Their Feature)
+        self.show_gaps = False
+        self.show_neighbor_gaps = False
+        self.gap_toggle_rect = None
+        self.neighbor_toggle_rect = None
+        self._gap_text = arcade.Text("", 0, 0, arcade.color.LIGHT_GRAY, 12, anchor_x="right", anchor_y="center")
+        
         self._tyre_textures = {}
         self._visible: bool = visible
         
@@ -282,6 +290,13 @@ class LeaderboardComponent(BaseComponent):
         
         self.selected = getattr(window, "selected_drivers", [])
         
+        # Sync toggles with window state
+        self.show_gaps = getattr(window, "leaderboard_show_gaps", self.show_gaps)
+        self.show_neighbor_gaps = getattr(window, "leaderboard_show_neighbor_gaps", self.show_neighbor_gaps)
+        if self.show_gaps and self.show_neighbor_gaps:
+            self.show_gaps = False
+
+        # --- 1. Background (Your Style) ---
         total_height = (20 * self.row_height) + 40
         if hasattr(self, 'y'):
             top_y = self.y
@@ -290,30 +305,50 @@ class LeaderboardComponent(BaseComponent):
             
         bottom_y = top_y - total_height
         
-        # 1. Main Background Card
         arcade.draw_lrbt_rectangle_filled(
             left=self.x, right=self.x + self.width,
             bottom=bottom_y, top=top_y,
             color=self.bg_color
         )
-        # Border
         arcade.draw_lrbt_rectangle_outline(
             left=self.x, right=self.x + self.width,
             bottom=bottom_y, top=top_y,
             color=self.border_color, border_width=1
         )
 
-        # 2. Header Row
+        # --- 2. Header Row & Toggles (Merged) ---
         header_height = 30
         arcade.draw_lrbt_rectangle_filled(
             left=self.x, right=self.x + self.width,
             bottom=top_y - header_height, top=top_y,
             color=self.header_color
         )
-        arcade.draw_text("POS", self.x + 10, top_y - 20, self.text_gray, 10, anchor_x="left", bold=True)
-        arcade.draw_text("DRIVER", self.x + 50, top_y - 20, self.text_gray, 10, anchor_x="left", bold=True)
-        arcade.draw_text("GAP", self.x + 140, top_y - 20, self.text_gray, 10, anchor_x="left", bold=True)
         
+        # Header Titles
+        arcade.draw_text("POS", self.x + 10, top_y - 15, self.text_gray, 10, anchor_x="left", anchor_y="center", bold=True)
+        arcade.draw_text("DRIVER", self.x + 50, top_y - 15, self.text_gray, 10, anchor_x="left", anchor_y="center", bold=True)
+        
+        # Gap Toggles (Their Feature - Positioned inside your header)
+        toggle_radius = 9
+        toggle_y = top_y - 15
+        gap_between_toggles = 25
+        
+        # Interval Toggle (I)
+        neighbor_x = self.x + self.width - gap_between_toggles - toggle_radius - 5
+        self.neighbor_toggle_rect = (neighbor_x - toggle_radius, toggle_y - toggle_radius, neighbor_x + toggle_radius, toggle_y + toggle_radius)
+        nb_bg = (100, 100, 100) if not self.show_neighbor_gaps else (50, 150, 50)
+        arcade.draw_circle_filled(neighbor_x, toggle_y, toggle_radius, nb_bg)
+        # FIX: Removed .draw() from the end of this line
+        arcade.draw_text("I", neighbor_x, toggle_y, arcade.color.WHITE, 10, anchor_x="center", anchor_y="center", bold=True)
+
+        # Leader Toggle (L)
+        toggle_x = self.x + self.width - toggle_radius - 5
+        self.gap_toggle_rect = (toggle_x - toggle_radius, toggle_y - toggle_radius, toggle_x + toggle_radius, toggle_y + toggle_radius)
+        lg_bg = (100, 100, 100) if not self.show_gaps else (50, 150, 50)
+        arcade.draw_circle_filled(toggle_x, toggle_y, toggle_radius, lg_bg)
+        # FIX: Removed .draw() from the end of this line
+        arcade.draw_text("L", toggle_x, toggle_y, arcade.color.WHITE, 10, anchor_x="center", anchor_y="center", bold=True)
+
         self.rects = []
 
         # Sorting Logic
@@ -325,7 +360,7 @@ class LeaderboardComponent(BaseComponent):
         else:
             new_entries = self.entries
 
-        # Draw Rows
+        # --- 3. Draw Rows ---
         start_y = top_y - header_height
         
         for i, entry in enumerate(new_entries):
@@ -336,11 +371,12 @@ class LeaderboardComponent(BaseComponent):
             else:
                 code, color, pos, progress_m = entry[:4]
 
+            # Geometry (Your Layout)
             row_top = start_y - (i * self.row_height)
             row_bottom = row_top - self.row_height
             center_y = (row_top + row_bottom) / 2
             
-            # Hitbox for clicking
+            # Hitbox
             self.rects.append((code, self.x, row_bottom, self.x + self.width, row_top))
 
             # Highlight Selection
@@ -348,14 +384,14 @@ class LeaderboardComponent(BaseComponent):
                 arcade.draw_lrbt_rectangle_filled(
                     left=self.x, right=self.x + self.width,
                     bottom=row_bottom, top=row_top,
-                    color=(255, 255, 255, 40) # White highlight
+                    color=(255, 255, 255, 40) 
                 )
 
             # A. Position Number
             current_pos = i + 1
-            arcade.draw_text(f"{current_pos}", self.x + 15, center_y - 5, self.text_white, 12, anchor_x="center", bold=False)
+            arcade.draw_text(f"{current_pos}", self.x + 15, center_y, self.text_white, 12, anchor_x="center", anchor_y="center", bold=False)
 
-            # B. Team Color Bar (Vertical Strip)
+            # B. Team Color Bar
             arcade.draw_lrbt_rectangle_filled(
                 left=self.x + 30, right=self.x + 34,
                 bottom=row_bottom + 4, top=row_top - 4,
@@ -363,19 +399,40 @@ class LeaderboardComponent(BaseComponent):
             )
 
             # C. Driver Code
-            arcade.draw_text(code, self.x + 45, center_y - 5, self.text_white, 12, anchor_x="left", bold=True)
+            arcade.draw_text(code, self.x + 45, center_y, self.text_white, 12, anchor_x="left", anchor_y="center", bold=True)
 
-            # D. Gap Interval
-            if gap_str:
-                gap_col = self.text_white if "Leader" in gap_str else self.text_gray
-                arcade.draw_text(gap_str, self.x + 140, center_y - 5, gap_col, 11, anchor_x="left")
+            # D. Gap Interval (Merged Logic)
+            gap_text = ""
+            # Priority 1: User toggled "Neighbor Gaps" (I)
+            if self.show_neighbor_gaps:
+                neighbor_info = getattr(window, "leaderboard_neighbor_gaps", {}).get(code)
+                if i == 0: gap_text = "-"
+                elif neighbor_info and neighbor_info.get("ahead"):
+                    _, _, time_s = neighbor_info.get("ahead")
+                    gap_text = f"+{time_s:.1f}s"
+            
+            # Priority 2: User toggled "Leader Gaps" (L)
+            elif self.show_gaps:
+                gap_val = getattr(window, "leaderboard_gaps", {}).get(code)
+                if gap_val is None: 
+                    gap_val = pos.get("gap")
+                try:
+                    s = float(gap_val)
+                    if abs(s) < 1e-6: gap_text = "-"
+                    else: gap_text = f"+{abs(s):.1f}s"
+                except: gap_text = ""
+            
+            # Priority 3: Default "Interval" from basic calculation
+            else:
+                gap_text = gap_str if gap_str else ""
 
-            # E. Tyre Icon
+            # Draw the gap text
+            arcade.draw_text(gap_text, self.x + 160, center_y, self.text_gray, 11, anchor_x="right", anchor_y="center")
+
+            # E. Tyre Icon & DRS (Their Feature)
             tyre_texture = self._tyre_textures.get(str(pos.get("tyre", "?")).upper())
             if tyre_texture:
                 icon_x = self.x + self.width - 20
-                
-                # Draw Texture
                 rect = arcade.XYWH(icon_x, center_y, 16, 16)
                 arcade.draw_texture_rect(texture=tyre_texture, rect=rect)
                 
@@ -387,27 +444,47 @@ class LeaderboardComponent(BaseComponent):
 
         # Lap 1 Warning
         if new_entries and new_entries[0][2].get("lap", 0) == 1:
-            arcade.draw_text("Sorting inaccurate Lap 1", self.x + 10, bottom_y - 20, arcade.color.YELLOW, 10)
+            arcade.draw_text("Sorting inaccurate Lap 1", self.x + 10, bottom_y - 15, arcade.color.YELLOW, 9)
 
     def on_mouse_press(self, window, x: float, y: float, button: int, modifiers: int):
+        # 1. Check Toggles
+        if self.neighbor_toggle_rect:
+            n_left, n_bottom, n_right, n_top = self.neighbor_toggle_rect
+            if n_left <= x <= n_right and n_bottom <= y <= n_top:
+                self.show_neighbor_gaps = not self.show_neighbor_gaps
+                if self.show_neighbor_gaps: self.show_gaps = False
+                setattr(window, "leaderboard_show_neighbor_gaps", self.show_neighbor_gaps)
+                setattr(window, "leaderboard_show_gaps", self.show_gaps)
+                return True
+                
+        if self.gap_toggle_rect:
+            g_left, g_bottom, g_right, g_top = self.gap_toggle_rect
+            if g_left <= x <= g_right and g_bottom <= y <= g_top:
+                self.show_gaps = not self.show_gaps
+                if self.show_gaps: self.show_neighbor_gaps = False
+                setattr(window, "leaderboard_show_gaps", self.show_gaps)
+                setattr(window, "leaderboard_show_neighbor_gaps", self.show_neighbor_gaps)
+                return True
+
+        # 2. Check Rows
         for code, left, bottom, right, top in self.rects:
             if left <= x <= right and bottom <= y <= top:
                 is_multi = (modifiers & arcade.key.MOD_SHIFT)
                 if is_multi:
-                    if code in self.selected:
-                        self.selected.remove(code)
-                    else:
-                        self.selected.append(code)
+                    if code in self.selected: self.selected.remove(code)
+                    else: self.selected.append(code)
                 else:
-                    if len(self.selected) == 1 and self.selected[0] == code:
-                        self.selected = []
-                    else:
-                        self.selected = [code]
+                    if len(self.selected) == 1 and self.selected[0] == code: self.selected = []
+                    else: self.selected = [code]
 
                 window.selected_drivers = self.selected
                 window.selected_driver = self.selected[-1] if self.selected else None
                 return True
         return False
+    
+
+
+
 class LapTimeLeaderboardComponent(BaseComponent):
     def __init__(self, x: int, right_margin: int = 260, width: int = 240):
         self.x = x

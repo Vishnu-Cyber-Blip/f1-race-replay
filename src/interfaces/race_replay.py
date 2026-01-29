@@ -558,9 +558,9 @@ class F1RaceReplayWindow(arcade.Window):
         # 2. Frame and Track Setup
         idx = min(int(self.frame_index), self.n_frames - 1)
         frame = self.frames[idx]
-        current_time_val = frame["t"]  # Renamed to avoid confusion
+        current_time_val = frame["t"] 
         
-        # Calculate Track Status (Safety Car, VSC, etc.)
+        # Calculate Track Status
         current_track_status = "1" 
         for status in self.track_statuses:
             if status['start_time'] <= current_time_val and (status['end_time'] is None or current_time_val < status['end_time']):
@@ -634,12 +634,49 @@ class F1RaceReplayWindow(arcade.Window):
             leader_code = max(driver_progress, key=lambda c: driver_progress[c])
             leader_lap = frame["drivers"][leader_code].get("lap", 1)
         else:
+            leader_code = None
             leader_lap = 1
 
         REFERENCE_SPEED_MS = 55.56
         raw_list = sorted([(c, self.driver_colors.get(c, arcade.color.WHITE), p, driver_progress[c]) 
                            for c, p in frame["drivers"].items()], key=lambda x: (x[3], x[0]), reverse=True)
         
+        # --- NEW MERGED LOGIC: Advanced Gap Calculation (From Other User) ---
+        # We calculate specific gap times so the LeaderboardComponent can toggle between Interval/Leader
+        leaderboard_gaps = {}
+        leaderboard_neighbor_gaps = {}
+        
+        leader_progress_val = raw_list[0][3] if raw_list else None
+
+        if raw_list and leader_progress_val is not None:
+            for idx, (code, _, pos, progress_m) in enumerate(raw_list):
+                # Gap to Leader
+                try:
+                    raw_to_leader = abs(leader_progress_val - (progress_m or 0.0))
+                    dist_to_leader = raw_to_leader / 10.0
+                    time_to_leader = dist_to_leader / REFERENCE_SPEED_MS
+                    leaderboard_gaps[code] = 0.0 if idx == 0 else time_to_leader
+                except Exception:
+                    leaderboard_gaps[code] = None
+
+                # Gap to Car Ahead (Neighbor)
+                ahead_info = None
+                try:
+                    if idx > 0:
+                        code_ahead, _, _, progress_ahead = raw_list[idx - 1]
+                        raw = abs((progress_m or 0.0) - (progress_ahead or 0.0))
+                        dist_m = raw / 10.0
+                        time_s = dist_m / REFERENCE_SPEED_MS
+                        ahead_info = (code_ahead, dist_m, time_s)
+                except Exception:
+                    ahead_info = None
+                leaderboard_neighbor_gaps[code] = {"ahead": ahead_info}
+
+        # Store these on the window so the component can access them
+        self.leaderboard_gaps = leaderboard_gaps
+        self.leaderboard_neighbor_gaps = leaderboard_neighbor_gaps
+        
+        # Prepare final list for component
         final_list = []
         for i, (code, color, pos, progress) in enumerate(raw_list):
             if i == 0:
@@ -653,55 +690,47 @@ class F1RaceReplayWindow(arcade.Window):
         
         # --- 5. DASHBOARD RENDERING ---
         if self.visible_hud:
-            # Prepare Data for UI
             weather_info = frame.get("weather") if frame else {}
             
-            # --- CUSTOM ANALYZER UI LOGIC ---
+            # --- CUSTOM ANALYZER UI LOGIC (Your Feature) ---
             self.analyzer_ui.update_data(frame, final_list)
             
             if self.analyzer_ui.visible:
-                # If custom analyzer is open, draw it
                 self.analyzer_ui.draw()
             else:
-                # Otherwise, draw standard Leaderboard and Driver Info
+                # Standard UI
                 if not self.use_custom_dashboard:
                     self.leaderboard_comp.draw(self)
                     self.driver_info_comp.draw(self)
                 else:
-                    # If you have other custom dashboard logic, put it here
                     self.ui_manager.draw()
                 
-                # Hitbox logic for clicks
                 self.leaderboard_rects = self.leaderboard_comp.rects
 
-            # --- DRAW NEW HEADER ---
-            current_time = frame["t"]
-            # 1. Format Time
-            m, s = divmod(int(current_time), 60)
+            # --- DRAW NEW HEADER (Your Feature) ---
+            m, s = divmod(int(current_time_val), 60)
             h, m = divmod(m, 60)
             time_str = f"{h:02d}:{m:02d}:{s:02d}"
 
-            w_data = frame.get("weather", {})
-
-            # 2. Safely get Session Info (Prevents crash if missing)
-            # If self.session_info doesn't exist, we use a placeholder {}
             s_info = getattr(self, 'session_info', {})
 
             self.draw_dashboard_header(
-                session_info=s_info,  # <--- Use the safe variable 's_info'
+                session_info=s_info,
                 current_lap=leader_lap,
                 total_laps=self.total_laps,
                 race_time_str=time_str,
-                weather_data=w_data
+                weather_data=weather_info
             )
+            
+            # --- TRACK STATUS BAR (Your Feature) ---
+            self.draw_track_status_indicator(current_track_status)
 
-        # 6. Global Static Overlays (Progress bar & Controls)
+        # 6. Global Static Overlays
         self.legend_comp.draw(self)
         self.progress_bar_comp.draw(self)
         self.race_controls_comp.draw(self)
         self.controls_popup_comp.draw(self)
         self.progress_bar_comp.draw_overlays(self)
-        self.draw_track_status_indicator(current_track_status)
 
     
 
