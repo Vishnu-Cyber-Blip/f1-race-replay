@@ -16,9 +16,7 @@ from src.ui_components import (
     build_track_from_example_lap,
     draw_finish_line
 )
-from src.ui_components import RaceControlPanel
-from .analyzer_ui import AdvancedAnalyzer
-from src.lib.sync import TelemetrySender
+from src.tyre_degradation_integration import TyreDegradationIntegrator
 
 
 SCREEN_WIDTH = 1280
@@ -68,7 +66,7 @@ class F1RaceReplayWindow(arcade.Window):
     def __init__(self, frames, track_statuses, example_lap, drivers, title,
                  playback_speed=1.0, driver_colors=None, circuit_rotation=0.0,
                  left_ui_margin=340, right_ui_margin=260, total_laps=None, visible_hud=True,
-                 session_info=None, use_custom_hud=False, telemetry_window=None):
+                 session_info=None, session=None):
         # Set resizable to True so the user can adjust mid-sim
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, title, resizable=True)
         self.maximize()
@@ -116,6 +114,27 @@ class F1RaceReplayWindow(arcade.Window):
 
         self.controls_popup_comp.set_size(340, 250) # width/height of the popup box
         self.controls_popup_comp.set_font_sizes(header_font_size=16, body_font_size=13) # adjust font sizes
+        self.degradation_integrator = None
+        if session is not None:
+            try:
+                print("Initializing tyre degradation model...")
+                self.degradation_integrator = TyreDegradationIntegrator(session=session)
+                
+                # This computes curves once at startup (1-2 seconds)
+                init_success = self.degradation_integrator.initialize_from_session()
+                
+                if init_success:
+                    print("✓ Tyre degradation model initialized successfully")
+                    # Link integrator to driver info component
+                    self.driver_info_comp.degradation_integrator = self.degradation_integrator
+                else:
+                    print("✗ Tyre degradation model initialization failed")
+                    self.degradation_integrator = None
+            except Exception as e:
+                print(f"✗ Tyre degradation initialization error: {e}")
+                self.degradation_integrator = None
+        else:
+            print("Note: Session not provided, tyre degradation disabled")
 
 
         
@@ -228,6 +247,8 @@ class F1RaceReplayWindow(arcade.Window):
         # Selection & hit-testing state for leaderboard
         self.selected_driver = None
         self.leaderboard_rects = []  # list of tuples: (code, left, bottom, right, top)
+        # store previous leaderboard order for up/down arrows
+        self.last_leaderboard_order = None
 
         self.movable_leaderboard = MovableSection(
             component=self.leaderboard_comp,
@@ -641,9 +662,99 @@ class F1RaceReplayWindow(arcade.Window):
             leader_code = None
             leader_lap = 1
 
+        # Time Calculation
+        t = frame["t"]
+        hours = int(t // 3600)
+        minutes = int((t % 3600) // 60)
+        seconds = int(t % 60)
+        time_str = f"{hours:02}:{minutes:02}:{seconds:02}"
+
+        # Format Lap String 
+        lap_str = f"Lap: {leader_lap}"
+        if self.total_laps is not None:
+            lap_str += f"/{self.total_laps}"
+
+        # Draw HUD - Top Left
+        if self.visible_hud:
+            self.lap_text.text = lap_str
+            self.time_text.text = f"Race Time: {time_str} (x{self.playback_speed})"
+            # default no status text
+            self.status_text.text = ""
+            # update status color and text if required
+            if current_track_status == "2":
+                self.status_text.text = "YELLOW FLAG"
+                self.status_text.color = arcade.color.YELLOW
+            elif current_track_status == "5":
+                self.status_text.text = "RED FLAG"
+                self.status_text.color = arcade.color.RED
+            elif current_track_status == "6":
+                self.status_text.text = "VIRTUAL SAFETY CAR"
+                self.status_text.color = arcade.color.ORANGE
+            elif current_track_status == "4":
+                self.status_text.text = "SAFETY CAR"
+                self.status_text.color = arcade.color.BROWN
+
+            self.lap_text.draw()
+            self.time_text.draw()
+            if self.status_text.text:
+                self.status_text.draw()
+
+        # Weather component (set info then draw)
+        weather_info = frame.get("weather") if frame else None
+        self.weather_comp.set_info(weather_info)
+        self.weather_comp.draw(self)
+        # optionally expose weather_bottom for driver info layout
+        self.weather_bottom = self.height - 170 - 130 if (weather_info or self.has_weather) else None
+
+        # Draw leaderboard via component
+        driver_list = []
+        for code, pos in frame["drivers"].items():
+            color = self.driver_colors.get(code, arcade.color.WHITE)
+            progress_m = driver_progress.get(code, float(pos.get("dist", 0.0)))
+            driver_list.append((code, color, pos, progress_m))
+        driver_list.sort(key=lambda x: x[3], reverse=True)
+        # A fixed reference speed for all gap calculations (200 km/h = 55.56 m/s)
         REFERENCE_SPEED_MS = 55.56
-        raw_list = sorted([(c, self.driver_colors.get(c, arcade.color.WHITE), p, driver_progress[c]) 
-                           for c, p in frame["drivers"].items()], key=lambda x: (x[3], x[0]), reverse=True)
+        leaderboard_gaps = {}
+        leaderboard_neighbor_gaps = {}
+
+        leader_progress_val = driver_list[0][3] if driver_list else None
+
+        if driver_list and leader_progress_val is not None:
+            # precompute gaps to leader (time) and interval gaps (dist+time)
+            for idx, (code, _, pos, progress_m) in enumerate(driver_list):
+                try:
+                    raw_to_leader = abs(leader_progress_val - (progress_m or 0.0))
+                    dist_to_leader = raw_to_leader / 10.0
+                    time_to_leader = dist_to_leader / REFERENCE_SPEED_MS
+                    leaderboard_gaps[code] = 0.0 if idx == 0 else time_to_leader
+                except Exception:
+                    leaderboard_gaps[code] = None
+
+                ahead_info = None
+                try:
+                    if idx > 0:
+                        code_ahead, _, _, progress_ahead = driver_list[idx - 1]
+                        raw = abs((progress_m or 0.0) - (progress_ahead or 0.0))
+                        dist_m = raw / 10.0
+                        time_s = dist_m / REFERENCE_SPEED_MS
+                        ahead_info = (code_ahead, dist_m, time_s)
+                except Exception:
+                    ahead_info = None
+
+                leaderboard_neighbor_gaps[code] = {"ahead": ahead_info}
+
+        self.leaderboard_gaps = leaderboard_gaps
+        self.leaderboard_neighbor_gaps = leaderboard_neighbor_gaps
+
+        self.last_leaderboard_order = [c for c, _, _, _ in driver_list]
+        self.leaderboard_comp.set_entries(driver_list)
+        self.leaderboard_comp.draw(self)
+        # expose rects for existing hit test compatibility if needed
+        self.leaderboard_rects = self.leaderboard_comp.rects
+
+        # Controls Legend - Bottom Left (keeps small offset from left UI edge)
+        self.legend_comp.draw(self)
         
         # --- NEW MERGED LOGIC: Advanced Gap Calculation (From Other User) ---
         # We calculate specific gap times so the LeaderboardComponent can toggle between Interval/Leader
@@ -823,6 +934,9 @@ class F1RaceReplayWindow(arcade.Window):
         elif symbol == arcade.key.R:
             self.frame_index = 0.0
             self.playback_speed = 1.0
+            # Clear degradation cache on restart
+            if self.degradation_integrator:
+                self.degradation_integrator.clear_cache()
             self.race_controls_comp.flash_button('rewind')
         elif symbol == arcade.key.D:
             self.toggle_drs_zones = not self.toggle_drs_zones

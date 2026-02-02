@@ -14,124 +14,84 @@ from PySide6.QtWidgets import QApplication
 # (Make sure you added 'def run_telemetry_monitor' to src/interfaces/telemetry_window.py)
 from src.interfaces.telemetry_window import run_telemetry_monitor
 
-def main(year=None, round_number=None, playback_speed=1, session_type='R', visible_hud=True, ready_file=None):
-    print(f"Loading F1 {year} Round {round_number} Session '{session_type}'")
-    session = load_session(year, round_number, session_type)
+    # Run the arcade screen showing qualifying results
 
-    print(f"Loaded session: {session.event['EventName']} - {session.event['RoundNumber']} - {session_type}")
+    title = f"{session.event['EventName']} - {'Sprint Qualifying' if session_type == 'SQ' else 'Qualifying Results'}"
+    
+    run_qualifying_replay(
+      session=session,
+      data=qualifying_session_data,
+      title=title,
+      ready_file=ready_file,
+    )
 
-    # Enable cache for fastf1
-    enable_cache()
+  else:
 
-    if session_type == 'Q' or session_type == 'SQ':
-        # Get the drivers who participated and their lap times
-        qualifying_session_data = get_quali_telemetry(session, session_type=session_type)
+    # Get the drivers who participated in the race
 
-        # Run the arcade screen showing qualifying results
-        title = f"{session.event['EventName']} - {'Sprint Qualifying' if session_type == 'SQ' else 'Qualifying Results'}"
-        
-        run_qualifying_replay(
-            session=session,
-            data=qualifying_session_data,
-            title=title,
-            ready_file=ready_file,
-        )
+    race_telemetry = get_race_telemetry(session, session_type=session_type)
 
-    else:
-        # Get the drivers who participated in the race
-        race_telemetry = get_race_telemetry(session, session_type=session_type)
+    # Get example lap for track layout
+    # Qualifying lap preferred for DRS zones (fallback to fastest race lap (no DRS data))
+    example_lap = None
+    
+    try:
+        print("Attempting to load qualifying session for track layout...")
+        quali_session = load_session(year, round_number, 'Q')
+        if quali_session is not None and len(quali_session.laps) > 0:
+            fastest_quali = quali_session.laps.pick_fastest()
+            if fastest_quali is not None:
+                quali_telemetry = fastest_quali.get_telemetry()
+                if 'DRS' in quali_telemetry.columns:
+                    example_lap = quali_telemetry
+                    print(f"Using qualifying lap from driver {fastest_quali['Driver']} for DRS Zones")
+    except Exception as e:
+        print(f"Could not load qualifying session: {e}")
 
-        # Get example lap for track layout
-        example_lap = None
-        
-        try:
-            print("Attempting to load qualifying session for track layout...")
-            quali_session = load_session(year, round_number, 'Q')
-            if quali_session is not None and len(quali_session.laps) > 0:
-                fastest_quali = quali_session.laps.pick_fastest()
-                if fastest_quali is not None:
-                    quali_telemetry = fastest_quali.get_telemetry()
-                    if 'DRS' in quali_telemetry.columns:
-                        example_lap = quali_telemetry
-                        print(f"Using qualifying lap from driver {fastest_quali['Driver']} for DRS Zones")
-        except Exception as e:
-            print(f"Could not load qualifying session: {e}")
+    # fallback: Use fastest race lap
+    if example_lap is None:
+        fastest_lap = session.laps.pick_fastest()
+        if fastest_lap is not None:
+            example_lap = fastest_lap.get_telemetry()
+            print("Using fastest race lap (DRS detection may use speed-based fallback)")
+        else:
+            print("Error: No valid laps found in session")
+            return
 
-        # fallback: Use fastest race lap
-        if example_lap is None:
-            fastest_lap = session.laps.pick_fastest()
-            if fastest_lap is not None:
-                example_lap = fastest_lap.get_telemetry()
-                print("Using fastest race lap (DRS detection may use speed-based fallback)")
-            else:
-                print("Error: No valid laps found in session")
-                return
+    drivers = session.drivers
 
-        drivers = session.drivers
+    # Get circuit rotation
 
-        # Get circuit rotation
-        circuit_rotation = get_circuit_rotation(session)
-        
-        # Prepare session info for display banner
-        session_info = {
-            'event_name': session.event.get('EventName', ''),
-            'circuit_name': session.event.get('Location', ''),  # Circuit location/name
-            'country': session.event.get('Country', ''),
-            'year': year,
-            'round': round_number,
-            'date': session.event.get('EventDate', '').strftime('%B %d, %Y') if session.event.get('EventDate') else '',
-            'total_laps': race_telemetry['total_laps']
-        }
+    circuit_rotation = get_circuit_rotation(session)
+    
+    # Prepare session info for display banner
+    session_info = {
+        'event_name': session.event.get('EventName', ''),
+        'circuit_name': session.event.get('Location', ''),  # Circuit location/name
+        'country': session.event.get('Country', ''),
+        'year': year,
+        'round': round_number,
+        'date': session.event.get('EventDate', '').strftime('%B %d, %Y') if session.event.get('EventDate') else '',
+        'total_laps': race_telemetry['total_laps']
+    }
 
-        # --- PROCESS SEPARATION LOGIC ---
+    # Run the arcade replay
 
-        # 1. SLAVE MODE: If this flag is present, we are the Telemetry Window
-        if "--telemetry-child" in sys.argv:
-            print("Starting Telemetry Child Process...")
-            run_telemetry_monitor(
-                frames=race_telemetry['frames'],
-                driver_colors=race_telemetry['driver_colors']
-            )
-            return # Exit when the window closes
-
-        # 2. MASTER MODE: If user requested monitor, spawn the child process first
-        if "--monitor" in sys.argv:
-            print("Launching Dual-Window System...")
-            
-            # Construct the command to launch ourselves again
-            # We use sys.executable (python.exe) and sys.argv[0] (main.py)
-            cmd = [sys.executable, sys.argv[0], "--viewer", "--telemetry-child"]
-            
-            # Pass the critical session info so the child loads the correct data
-            if "--year" not in sys.argv:
-                cmd.extend(["--year", str(year)])
-            else:
-                cmd.extend(["--year", str(year)]) # Ensure we pass it if it was in args
-            
-            if "--round" not in sys.argv:
-                cmd.extend(["--round", str(round_number)])
-            else:
-                cmd.extend(["--round", str(round_number)])
-
-            # Launch the child process independently (non-blocking)
-            subprocess.Popen(cmd)
-
-        # 3. RUN REPLAY (Master)
-        # This runs in the main process. If --monitor was passed, the child is already running alongside.
-        run_arcade_replay(
-            frames=race_telemetry['frames'],
-            track_statuses=race_telemetry['track_statuses'],
-            example_lap=example_lap,
-            drivers=drivers,
-            playback_speed=playback_speed,
-            driver_colors=race_telemetry['driver_colors'],
-            title=f"{session.event['EventName']} - {'Sprint' if session_type == 'S' else 'Race'}",
-            total_laps=race_telemetry['total_laps'],
-            circuit_rotation=circuit_rotation,
-            visible_hud=visible_hud,
-            ready_file=ready_file,
-            session_info=session_info
-        )
+    run_arcade_replay(
+      frames=race_telemetry['frames'],
+      track_statuses=race_telemetry['track_statuses'],
+      example_lap=example_lap,
+      drivers=drivers,
+      playback_speed=playback_speed,
+      driver_colors=race_telemetry['driver_colors'],
+      title=f"{session.event['EventName']} - {'Sprint' if session_type == 'S' else 'Race'}",
+      total_laps=race_telemetry['total_laps'],
+      circuit_rotation=circuit_rotation,
+      visible_hud=visible_hud,
+      ready_file=ready_file,
+      session_info=session_info,
+      session=session,
+    )
 
 if __name__ == "__main__":
 
