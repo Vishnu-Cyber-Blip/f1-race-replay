@@ -11,7 +11,6 @@ from src.gui.race_selection import RaceSelectionWindow
 from PySide6.QtWidgets import QApplication
 
 # Import the new runner function for the telemetry window
-# (Make sure you added 'def run_telemetry_monitor' to src/interfaces/telemetry_window.py)
 from src.interfaces.telemetry_window import run_telemetry_monitor
 
 def main(year=None, round_number=None, playback_speed=1, session_type='R', visible_hud=True, ready_file=None):
@@ -75,7 +74,7 @@ def main(year=None, round_number=None, playback_speed=1, session_type='R', visib
         # Prepare session info for display banner
         session_info = {
             'event_name': session.event.get('EventName', ''),
-            'circuit_name': session.event.get('Location', ''),  # Circuit location/name
+            'circuit_name': session.event.get('Location', ''),
             'country': session.event.get('Country', ''),
             'year': year,
             'round': round_number,
@@ -99,25 +98,23 @@ def main(year=None, round_number=None, playback_speed=1, session_type='R', visib
             print("Launching Dual-Window System...")
             
             # Construct the command to launch ourselves again
-            # We use sys.executable (python.exe) and sys.argv[0] (main.py)
             cmd = [sys.executable, sys.argv[0], "--viewer", "--telemetry-child"]
             
-            # Pass the critical session info so the child loads the correct data
             if "--year" not in sys.argv:
                 cmd.extend(["--year", str(year)])
             else:
-                cmd.extend(["--year", str(year)]) # Ensure we pass it if it was in args
+                cmd.extend(["--year", str(year)])
             
             if "--round" not in sys.argv:
                 cmd.extend(["--round", str(round_number)])
             else:
                 cmd.extend(["--round", str(round_number)])
 
-            # Launch the child process independently (non-blocking)
+            # Launch the child process independently
             subprocess.Popen(cmd)
 
         # 3. RUN REPLAY (Master)
-        # This runs in the main process. If --monitor was passed, the child is already running alongside.
+        # We pass the 'session' object now (New Upstream Feature)
         run_arcade_replay(
             frames=race_telemetry['frames'],
             track_statuses=race_telemetry['track_statuses'],
@@ -130,13 +127,13 @@ def main(year=None, round_number=None, playback_speed=1, session_type='R', visib
             circuit_rotation=circuit_rotation,
             visible_hud=visible_hud,
             ready_file=ready_file,
-            session_info=session_info
+            session_info=session_info,
+            session=session  # <--- UPSTREAM FEATURE: Pass session for tyre model
         )
 
 if __name__ == "__main__":
 
     if "--cli" in sys.argv:
-        # Run the CLI
         cli_load()
         sys.exit(0)
 
@@ -147,7 +144,7 @@ if __name__ == "__main__":
         except (ValueError, IndexError):
             year = 2025
     else:
-        year = 2025  # Default year
+        year = 2025
 
     if "--round" in sys.argv:
         try:
@@ -156,7 +153,7 @@ if __name__ == "__main__":
         except (ValueError, IndexError):
             round_number = 12
     else:
-        round_number = 12  # Default round number
+        round_number = 12
 
     if "--list-rounds" in sys.argv:
         list_rounds(year)
@@ -166,23 +163,18 @@ if __name__ == "__main__":
         playback_speed = 1
 
     if "--viewer" in sys.argv:
-    
         visible_hud = True
         if "--no-hud" in sys.argv:
             visible_hud = False
 
-        # Session type selection
         session_type = 'SQ' if "--sprint-qualifying" in sys.argv else ('S' if "--sprint" in sys.argv else ('Q' if "--qualifying" in sys.argv else 'R'))
 
-        # Optional ready-file path used when spawned from the GUI to signal ready state
         ready_file = None
         if "--ready-file" in sys.argv:
             idx = sys.argv.index("--ready-file") + 1
             if idx < len(sys.argv):
                 ready_file = sys.argv[idx]
 
-        # NOTE: "--monitor" and "--telemetry-child" are checked inside main()
-        # utilizing sys.argv directly.
         main(year, round_number, playback_speed, session_type=session_type, visible_hud=visible_hud, ready_file=ready_file)
         sys.exit(0)
 
