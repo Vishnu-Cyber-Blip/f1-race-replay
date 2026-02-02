@@ -3,7 +3,12 @@ from typing import List, Literal, Tuple, Optional
 from typing import Sequence, Optional, Tuple
 from src.lib.time import format_time
 import numpy as np
+import pandas as pd
 import os
+from src.tyre_degradation_integration import (
+    format_tyre_health_bar, 
+    format_degradation_text
+)
 
 def _format_wind_direction(degrees: Optional[float]) -> str:
   if degrees is None:
@@ -251,16 +256,14 @@ class LeaderboardComponent(BaseComponent):
         
         self.entries = []  # list of tuples (code, color, pos, progress_m, gap_str)
         self.rects = []    # clickable rects per entry
-        self.selected = []  
-        self.row_height = 28  # Slightly taller for better readability
-        
-        # Gap Toggle State (Their Feature)
+        self.selected = []  # Changed to list for multiple selection
+        self.row_height = 25
         self.show_gaps = False
         self.show_neighbor_gaps = False
         self.gap_toggle_rect = None
         self.neighbor_toggle_rect = None
-        self._gap_text = arcade.Text("", 0, 0, arcade.color.LIGHT_GRAY, 12, anchor_x="right", anchor_y="center")
-        
+        # Reuse a single Text object for gap rendering to avoid reallocating each frame
+        self._gap_text = arcade.Text("", 0, 0, arcade.color.LIGHT_GRAY, 12, anchor_x="right", anchor_y="top")
         self._tyre_textures = {}
         self._visible: bool = visible
         
@@ -289,32 +292,40 @@ class LeaderboardComponent(BaseComponent):
             return
         
         self.selected = getattr(window, "selected_drivers", [])
-        
-        # Sync toggles with window state
+        leaderboard_y = window.height - 40
+        arcade.Text("Leaderboard", self.x, leaderboard_y, arcade.color.WHITE, 20, bold=True, anchor_x="left", anchor_y="top").draw()
+        # sync with window state if present
         self.show_gaps = getattr(window, "leaderboard_show_gaps", self.show_gaps)
         self.show_neighbor_gaps = getattr(window, "leaderboard_show_neighbor_gaps", self.show_neighbor_gaps)
+
+        # If both were set externally, prefer neighbor (interval) gaps and clear leader gaps.
         if self.show_gaps and self.show_neighbor_gaps:
             self.show_gaps = False
 
-        # --- 1. Background (Your Style) ---
-        total_height = (20 * self.row_height) + 40
-        if hasattr(self, 'y'):
-            top_y = self.y
-        else:
-            top_y = window.height - 90
-            
-        bottom_y = top_y - total_height
+        # small radio btns to the right of the title: interval gaps and leader gaps
+        toggle_radius = 10
+        toggle_y = leaderboard_y - 15
+        gap_between_toggles = 30
         
-        arcade.draw_lrbt_rectangle_filled(
-            left=self.x, right=self.x + self.width,
-            bottom=bottom_y, top=top_y,
-            color=self.bg_color
-        )
-        arcade.draw_lrbt_rectangle_outline(
-            left=self.x, right=self.x + self.width,
-            bottom=bottom_y, top=top_y,
-            color=self.border_color, border_width=1
-        )
+        # interval radio-btn (I)
+        neighbor_x = self.x + self.width - gap_between_toggles - toggle_radius
+        self.neighbor_toggle_rect = (neighbor_x - toggle_radius, toggle_y - toggle_radius, neighbor_x + toggle_radius, toggle_y + toggle_radius)
+        nb_bg = (100, 100, 100) if not self.show_neighbor_gaps else (50, 150, 50)
+        arcade.draw_circle_filled(neighbor_x, toggle_y, toggle_radius, nb_bg)
+        nb_border = (150, 150, 150) if not self.show_neighbor_gaps else (80, 200, 80)
+        arcade.draw_circle_outline(neighbor_x, toggle_y, toggle_radius, nb_border, 2)
+        arcade.Text("I", neighbor_x, toggle_y, arcade.color.WHITE, 12, anchor_x="center", anchor_y="center", bold=True).draw()
+
+        # leader radio-btn (L)
+        toggle_x = self.x + self.width - toggle_radius
+        self.gap_toggle_rect = (toggle_x - toggle_radius, toggle_y - toggle_radius, toggle_x + toggle_radius, toggle_y + toggle_radius)
+        lg_bg = (100, 100, 100) if not self.show_gaps else (50, 150, 50)
+        arcade.draw_circle_filled(toggle_x, toggle_y, toggle_radius, lg_bg)
+        lg_border = (150, 150, 150) if not self.show_gaps else (80, 200, 80)
+        arcade.draw_circle_outline(toggle_x, toggle_y, toggle_radius, lg_border, 2)
+        arcade.Text("L", toggle_x, toggle_y, arcade.color.WHITE, 12, anchor_x="center", anchor_y="center", bold=True).draw()
+
+        self.rects = []
 
         # --- 2. Header Row & Toggles (Merged) ---
         header_height = 30
@@ -426,17 +437,114 @@ class LeaderboardComponent(BaseComponent):
             else:
                 gap_text = gap_str if gap_str else ""
 
-            # Draw the gap text
-            arcade.draw_text(gap_text, self.x + 160, center_y, self.text_gray, 11, anchor_x="right", anchor_y="center")
+            # Gap display (if enabled)
+            if getattr(self, "show_neighbor_gaps", False):
+                neighbor_info = None
+                if hasattr(window, "leaderboard_neighbor_gaps"):
+                    neighbor_info = window.leaderboard_neighbor_gaps.get(code)
 
-            # E. Tyre Icon & DRS (Their Feature)
-            tyre_texture = self._tyre_textures.get(str(pos.get("tyre", "?")).upper())
+                if i == 0:
+                    gap_text = "-"
+                else:
+                    if neighbor_info:
+                        if neighbor_info.get("ahead"):
+                            _, dist_m, time_s = neighbor_info.get("ahead")
+                            gap_text = f"+{time_s:.1f}s"
+                        else:
+                            gap_text = ""
+                    else:
+                        gap_text = ""
+
+            elif getattr(self, "show_gaps", False):
+                gap_text = ""
+                gap_val = None
+                # prefer window-provided precomputed gaps
+                if hasattr(window, "leaderboard_gaps"):
+                    gap_val = window.leaderboard_gaps.get(code)
+                if gap_val is None:
+                    gap_val = pos.get("gap") or pos.get("gap_to_leader")
+                if gap_val is None:
+                    gap_text = ""
+                else:
+                    try:
+                        # expect seconds (float)
+                        s = float(gap_val)
+                        # leader (zero) gets dash
+                        if abs(s) < 1e-6:
+                            gap_text = "-"
+                        else:
+                            sign = "+" if s > 0 else "-"
+                            gap_text = f"{sign}{abs(s):.1f}s"
+                    except Exception:
+                        gap_text = str(gap_val)
+
+                pass
+
+            # if either leader or neighbor gaps are enabled, draw the gap text
+            if getattr(self, "show_neighbor_gaps", False) or getattr(self, "show_gaps", False):
+                gap_x = right_x - 36
+                if 'gap_text' in locals() and gap_text:
+                    gap_color = arcade.color.BLACK if code in self.selected else arcade.color.LIGHT_GRAY
+                    # Update and draw the reusable gap Text object
+                    self._gap_text.text = gap_text
+                    self._gap_text.x = gap_x
+                    self._gap_text.y = top_y
+                    self._gap_text.color = gap_color
+                    self._gap_text.draw()
+
+            # Tyre Icons
+            tyre_val = pos.get("tyre", "?")
+            tyre_texture = self._tyre_textures.get(str(tyre_val).upper())
             if tyre_texture:
-                icon_x = self.x + self.width - 20
-                rect = arcade.XYWH(icon_x, center_y, 16, 16)
-                arcade.draw_texture_rect(texture=tyre_texture, rect=rect)
-                
-                # DRS Dot
+                # position tyre icon inside the leaderboard area so it doesn't collide with track
+                tyre_icon_x = left_x + self.width - 10
+                tyre_icon_y = top_y - 12
+                icon_size = 16
+                rect = arcade.XYWH(tyre_icon_x, tyre_icon_y, icon_size, icon_size)
+
+                current_life = pos.get("tyre_life", 0)
+                tyre_health_ratio = 1.0
+                if window.degradation_integrator:
+                    idx = min(int(window.frame_index), len(window.frames) - 1)
+                    health_data = window.degradation_integrator.get_health_for_frame(code, window.frames[idx])
+                    if health_data:
+                        tyre_health_ratio = health_data['health'] / 100.0
+                else:
+                    max_tyre_life = getattr(window, "max_tyre_life", {})
+                    try:
+                        tyre_key = int(tyre_val)
+                    except (TypeError, ValueError):
+                        max_life = 30
+                    else:
+                        max_life = max_tyre_life.get(tyre_key, 30)
+                    if max_life > 0:
+                        tyre_health_ratio = max(0.0, min(1.0, 1.0 - (current_life / max_life)))
+                    else:
+                        tyre_health_ratio = 1.0
+
+                arcade.draw_texture_rect(rect=rect, texture=tyre_texture, alpha=80)
+                bright_height = icon_size * tyre_health_ratio
+                if bright_height > 0:
+                    window.ctx.scissor = (int(tyre_icon_x - 8), int(tyre_icon_y - 8), int(icon_size), int(bright_height))
+                    arcade.draw_texture_rect(rect=rect, texture=tyre_texture, alpha=255)
+                    window.ctx.scissor = None
+                    
+                try:
+                    life_display = str(int(current_life)) if pd.notna(current_life) else "0"
+                except (ValueError, TypeError):
+                    life_display = "0"
+                arcade.Text(
+                    life_display,
+                    tyre_icon_x + 8,
+                    tyre_icon_y - 8,
+                    arcade.color.WHITE,
+                    8,
+                    bold=True,
+                    anchor_x="center",
+                    anchor_y="center"
+                ).draw()
+
+                # DRS Indicator
                 drs_val = pos.get("drs", 0)
                 is_drs_on = drs_val and int(drs_val) >= 10
                 drs_color = arcade.color.GREEN if is_drs_on else (80, 80, 80)
@@ -447,26 +555,35 @@ class LeaderboardComponent(BaseComponent):
             arcade.draw_text("Sorting inaccurate Lap 1", self.x + 10, bottom_y - 15, arcade.color.YELLOW, 9)
 
     def on_mouse_press(self, window, x: float, y: float, button: int, modifiers: int):
-        # 1. Check Toggles
+        # interval toggle (radio type)
         if self.neighbor_toggle_rect:
             n_left, n_bottom, n_right, n_top = self.neighbor_toggle_rect
             if n_left <= x <= n_right and n_bottom <= y <= n_top:
-                self.show_neighbor_gaps = not self.show_neighbor_gaps
-                if self.show_neighbor_gaps: self.show_gaps = False
-                setattr(window, "leaderboard_show_neighbor_gaps", self.show_neighbor_gaps)
-                setattr(window, "leaderboard_show_gaps", self.show_gaps)
+                if self.show_neighbor_gaps:
+                    # currently selected -> deselect
+                    self.show_neighbor_gaps = False
+                    setattr(window, "leaderboard_show_neighbor_gaps", False)
+                else:
+                    # select interval gaps and deselect leader gaps
+                    self.show_neighbor_gaps = True
+                    self.show_gaps = False
+                    setattr(window, "leaderboard_show_neighbor_gaps", True)
+                    setattr(window, "leaderboard_show_gaps", False)
                 return True
-                
+        # leader toggle (radio type)
         if self.gap_toggle_rect:
             g_left, g_bottom, g_right, g_top = self.gap_toggle_rect
             if g_left <= x <= g_right and g_bottom <= y <= g_top:
-                self.show_gaps = not self.show_gaps
-                if self.show_gaps: self.show_neighbor_gaps = False
-                setattr(window, "leaderboard_show_gaps", self.show_gaps)
-                setattr(window, "leaderboard_show_neighbor_gaps", self.show_neighbor_gaps)
+                if self.show_gaps:
+                    self.show_gaps = False
+                    setattr(window, "leaderboard_show_gaps", False)
+                else:
+                    self.show_gaps = True
+                    self.show_neighbor_gaps = False
+                    setattr(window, "leaderboard_show_gaps", True)
+                    setattr(window, "leaderboard_show_neighbor_gaps", False)
                 return True
 
-        # 2. Check Rows
         for code, left, bottom, right, top in self.rects:
             if left <= x <= right and bottom <= y <= top:
                 is_multi = (modifiers & arcade.key.MOD_SHIFT)
@@ -721,6 +838,7 @@ class DriverInfoComponent(BaseComponent):
         self.left = left
         self.width = width
         self.min_top = min_top
+        self.degradation_integrator = None
 
     def draw(self, window):
         # Support multiple selection via window.selected_drivers
@@ -831,6 +949,52 @@ class DriverInfoComponent(BaseComponent):
         arcade.Text(gap_ahead, left_text_x, cursor_y, arcade.color.LIGHT_GRAY, 11, anchor_y="center").draw()
         cursor_y -= 22
         arcade.Text(gap_behind, left_text_x, cursor_y, arcade.color.LIGHT_GRAY, 11, anchor_y="center").draw()
+        
+        if self.degradation_integrator and hasattr(window, 'frames'):
+            try:
+                idx = min(int(window.frame_index), window.n_frames - 1)
+                frame = window.frames[idx]
+                health_data = self.degradation_integrator.get_health_for_frame(code, frame)
+                
+                if health_data:
+                    cursor_y -= 28  # Space before health bar
+                    
+                    # Draw tyre health bar
+                    bar_params = format_tyre_health_bar(health_data['health'], width=180, height=14)
+                    bar_x = left + 15
+                    bar_y = cursor_y
+                    
+                    # Background bar (dark gray)
+                    arcade.draw_rect_filled(
+                        arcade.XYWH(bar_x + bar_params['width']/2, bar_y, 
+                                   bar_params['width'], bar_params['height']),
+                        (50, 50, 50)
+                    )
+                    
+                    # Health fill bar (colored)
+                    if bar_params['fill_width'] > 0:
+                        arcade.draw_rect_filled(
+                            arcade.XYWH(bar_x + bar_params['fill_width']/2, bar_y, 
+                                       bar_params['fill_width'], bar_params['height']),
+                            bar_params['color']
+                        )
+                    
+                    # Border
+                    arcade.draw_rect_outline(
+                        arcade.XYWH(bar_x + bar_params['width']/2, bar_y, 
+                                   bar_params['width'], bar_params['height']),
+                        arcade.color.WHITE, 1
+                    )
+                    
+                    cursor_y -= 18
+                    
+                    # Tyre info text
+                    tyre_text = format_degradation_text(health_data)
+                    arcade.Text(tyre_text, left_text_x, cursor_y, 
+                               arcade.color.LIGHT_GRAY, 10, anchor_y="center").draw()
+                    
+            except (KeyError, AttributeError, TypeError) as e:
+                print(f"Error displaying driver info: {e}")
 
         # Graphs
         thr, brk = driver_pos.get('throttle', 0), driver_pos.get('brake', 0)
